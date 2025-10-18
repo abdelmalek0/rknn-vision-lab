@@ -1,0 +1,7 @@
+<resources>
+    <string name="app_name">Vision Lab</string>
+    <string name="videoCard">Video</string>
+    <string name="imageCard">Image</string>
+    <string name="settingsCard">Settings</string>
+    <string name="play">Play</string>
+</resources>
