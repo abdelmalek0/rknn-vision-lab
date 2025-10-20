@@ -4,12 +4,12 @@ plugins {
 
 android {
     namespace 'com.smartprints.rknn_vision_lab'
-    compileSdk 36
+    compileSdk 34
 
     defaultConfig {
         applicationId "com.smartprints.rknn_vision_lab"
         minSdk 24
-        targetSdk 36
+        targetSdk 34
         versionCode 1
         versionName "1.0"
 
@@ -46,6 +46,29 @@ dependencies {
     implementation 'androidx.camera:camera-camera2:1.2.2'
     implementation 'androidx.camera:camera-lifecycle:1.2.2'
     implementation 'androidx.camera:camera-view:1.2.2'
-    // OpenCV for RTSP frame grabbing
-    implementation("org.opencv:opencv:4.9.0")
+
+    implementation project(path: ':opencv')
+    implementation 'com.elvishew:xlog:1.11.1'
+}
+
+
+configurations {
+    javacpp
+}
+
+task javacppExtract(type: Copy) {
+    dependsOn configurations.javacpp
+
+    from { configurations.javacpp.collect { zipTree(it) } }
+    include "lib/**"
+    into "$buildDir/javacpp/"
+    android.sourceSets.main.jniLibs.srcDirs += ["$buildDir/javacpp/lib/"]
+
+    tasks.getByName('preBuild').dependsOn javacppExtract
+}
+
+dependencies {
+    implementation group: 'org.bytedeco', name: 'javacv', version: '1.5.8'
+    javacpp group: 'org.bytedeco', name: 'opencv-platform', version: '4.6.0-1.5.8'
+    javacpp group: 'org.bytedeco', name: 'ffmpeg-platform', version: "5.1.2-1.5.8"
 }

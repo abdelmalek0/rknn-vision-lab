@@ -5,10 +5,8 @@ import android.os.Bundle;
 
 import androidx.activity.EdgeToEdge;
 import androidx.appcompat.app.AppCompatActivity;
-import androidx.core.graphics.Insets;
-import androidx.core.view.ViewCompat;
-import androidx.core.view.WindowInsetsCompat;
 
+import com.elvishew.xlog.XLog;
 import com.google.android.material.card.MaterialCardView;
 import com.smartprints.rknn_vision_lab.video.VideoDemoActivity;
 
@@ -41,9 +39,9 @@ public class MainActivity extends AppCompatActivity {
     }
     static {
         if (!org.opencv.android.OpenCVLoader.initDebug()) {
-            System.out.println("OpenCV not loaded");
+            XLog.d("OpenCV not loaded");
         } else {
-            System.out.println("OpenCV loaded successfully");
+            XLog.d("OpenCV loaded successfully");
         }
     }
 

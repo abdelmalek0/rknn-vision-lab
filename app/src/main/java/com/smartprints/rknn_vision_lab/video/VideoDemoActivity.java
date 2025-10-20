@@ -1,24 +1,20 @@
 package com.smartprints.rknn_vision_lab.video;
 
-import static com.smartprints.rknn_vision_lab.CameraUtils.yuv420ToArgb;
+import static com.smartprints.rknn_vision_lab.cam.CameraUtils.yuv420ToArgb;
 import static org.opencv.android.Utils.matToBitmap;
 
 import android.Manifest;
 import android.annotation.SuppressLint;
-import android.content.Intent;
 import android.content.pm.PackageManager;
-import android.graphics.BitmapFactory;
 import android.graphics.Canvas;
 import android.graphics.ImageFormat;
-import android.graphics.Matrix;
+import android.graphics.Rect;
 import android.media.Image;
 import android.media.ImageReader;
 import android.net.Uri;
-import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.HandlerThread;
-import android.provider.Settings;
 import android.graphics.Bitmap;
 import android.view.SurfaceHolder;
 import android.view.SurfaceView;
@@ -38,39 +34,43 @@ import androidx.activity.result.contract.ActivityResultContracts;
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 import androidx.appcompat.app.AppCompatActivity;
-import androidx.camera.core.CameraSelector;
-import androidx.camera.core.Preview;
-import androidx.camera.lifecycle.ProcessCameraProvider;
 import androidx.core.content.ContextCompat;
 
 import org.opencv.android.Utils;
 import org.opencv.core.Core;
 import org.opencv.core.Mat;
-import org.opencv.imgproc.Imgproc;
 import org.opencv.videoio.VideoCapture;
 
-import com.google.android.exoplayer2.ExoPlayer;
-import com.google.android.exoplayer2.MediaItem;
-import com.google.android.exoplayer2.ui.PlayerView;
+import java.io.File;
+import android.util.Log;
 import com.google.android.material.chip.Chip;
 import com.google.android.material.chip.ChipGroup;
 import com.google.android.material.textfield.TextInputEditText;
-import com.google.common.util.concurrent.ListenableFuture;
-import com.smartprints.rknn_vision_lab.CameraAPI;
-import com.smartprints.rknn_vision_lab.CameraUtils;
+import com.smartprints.rknn_vision_lab.cam.CameraAPI;
+import com.smartprints.rknn_vision_lab.cam.CameraUtils;
 import com.smartprints.rknn_vision_lab.R;
+import com.smartprints.rknn_vision_lab.streaming.RtspStreamingService;
 
-import java.nio.ByteBuffer;
 import java.util.List;
-import java.util.concurrent.ExecutionException;
+import android.media.MediaPlayer;
+import android.media.MediaExtractor;
+import android.media.MediaFormat;
+import android.media.MediaCodec;
+import java.nio.ByteBuffer;
 
 public class VideoDemoActivity extends AppCompatActivity {
 
+    private static final String TAG = "VideoDemoActivity";
+
     private static final int REQUEST_CODE_PERMISSIONS = 101;
+    private static final int REQUEST_CODE_STORAGE = 102;
     private static final String[] REQUIRED_PERMISSIONS = new String[]{
             Manifest.permission.CAMERA,
             Manifest.permission.RECORD_AUDIO,
             Manifest.permission.INTERNET
+    };
+    private static final String[] STORAGE_PERMISSIONS = new String[]{
+            Manifest.permission.READ_EXTERNAL_STORAGE
     };
     private ImageView opencvImage;
     private Button opencvRtspBtn;
@@ -93,6 +93,15 @@ public class VideoDemoActivity extends AppCompatActivity {
     private Thread filePlaybackThread;
     private volatile boolean filePlaybackRunning = false;
     private final Object filePlaybackLock = new Object();
+    // Native MediaPlayer for reliable playback of content URIs / files
+    private MediaPlayer mediaPlayer = null;
+    // MediaCodec/MediaExtractor for frame-by-frame playback
+    private MediaExtractor mediaExtractor;
+    private MediaCodec mediaCodec;
+    private ImageReader fileImageReader;
+    
+    // RTSP streaming
+    private RtspStreamingService rtspStreamingService;
 
     @Override
     protected void onCreate(@Nullable Bundle savedInstanceState) {
@@ -100,12 +109,32 @@ public class VideoDemoActivity extends AppCompatActivity {
         setContentView(R.layout.activity_video_demo);
         previewView = findViewById(R.id.preview_view);
         surfaceHolder = previewView.getHolder();
+        
+        // Initialize RTSP streaming service
+        rtspStreamingService = new RtspStreamingService(surfaceHolder);
         playVideo = findViewById(R.id.playVideo);
         pickVideoLauncher = registerForActivityResult(new ActivityResultContracts.GetContent(), uri -> {
             if (uri != null) {
+                Log.d(TAG, "Video selected: " + uri);
+                Log.d(TAG, "URI scheme: " + uri.getScheme());
+                Log.d(TAG, "URI authority: " + uri.getAuthority());
+                
+                // Take persistable permission for content URIs
+                try {
+                    if ("content".equalsIgnoreCase(uri.getScheme())) {
+                        getContentResolver().takePersistableUriPermission(uri, 
+                            android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION);
+                        Log.d(TAG, "Persistable URI permission granted");
+                    }
+                } catch (SecurityException e) {
+                    Log.w(TAG, "Could not take persistable permission (this is OK for some URIs)", e);
+                }
+                
                 // Ensure camera is fully stopped before starting playback
                 stopCameraPipeline();
                 startFilePlayback(uri);
+            } else {
+                Log.w(TAG, "No video selected (URI is null)");
             }
         });
 
@@ -150,12 +179,12 @@ public class VideoDemoActivity extends AppCompatActivity {
             int checkedId = checkedIds.get(0);
             Chip chip = group.findViewById(checkedId);
             if (chip != null) {
-                controlsGroup.setVisibility(View.VISIBLE);
                 if (checkedId == R.id.camera) {
+                    controlsGroup.setVisibility(View.GONE);
                     cameraSwitch.setVisibility(View.VISIBLE);
-                    rtspInput.setVisibility(View.GONE);
                     // If switching to camera, ensure any file or player playback is stopped/hidden
                     stopFilePlayback();
+                    stopRtspStreaming();
                     // Start camera immediately when switching to Camera
                     if (!surfaceCallbackAdded) {
                         startCameraPreview();
@@ -165,22 +194,31 @@ public class VideoDemoActivity extends AppCompatActivity {
                         if (w > 0 && h > 0) setupCameraOnSurface(surfaceHolder, w, h);
                     }
                 } else if (checkedId == R.id.file) {
-                    cameraSwitch.setVisibility(View.GONE);
-                    rtspInput.setVisibility(View.GONE);
-                    // Stop camera and immediately open picker
+                    controlsGroup.setVisibility(View.GONE);
+                    // Stop camera and check permissions before opening picker
                     stopCameraPipeline();
                     stopFilePlayback();
+                    stopRtspStreaming();
+                    
+                    // Check storage permissions
+                    if (!storagePermissionsGranted()) {
+                        Log.w(TAG, "Storage permissions not granted, requesting...");
+                        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
+                            requestPermissions(new String[]{Manifest.permission.READ_MEDIA_VIDEO}, REQUEST_CODE_STORAGE);
+                        } else {
+                            requestPermissions(STORAGE_PERMISSIONS, REQUEST_CODE_STORAGE);
+                        }
+                        return;
+                    }
+                    
                     pickVideoLauncher.launch("video/*");
                 } else if (checkedId == R.id.stream) {
+                    controlsGroup.setVisibility(View.VISIBLE);
                     cameraSwitch.setVisibility(View.GONE);
-                    rtspInput.setVisibility(View.VISIBLE);
                 } else {
                     cameraSwitch.setVisibility(View.GONE);
-                    rtspInput.setVisibility(View.GONE);
                     controlsGroup.setVisibility(View.GONE);
                 }
-//                String selectedText = chip.getText().toString();
-//                Toast.makeText(VideoDemoActivity.this, "Selected: " + selectedText, Toast.LENGTH_SHORT).show();
             }
         });
 
@@ -203,33 +241,32 @@ public class VideoDemoActivity extends AppCompatActivity {
                     }
                 }
             } else if (checkedId == R.id.file) {
+                // Check permissions before launching picker
+                if (!storagePermissionsGranted()) {
+                    if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
+                        requestPermissions(new String[]{Manifest.permission.READ_MEDIA_VIDEO}, REQUEST_CODE_STORAGE);
+                    } else {
+                        requestPermissions(STORAGE_PERMISSIONS, REQUEST_CODE_STORAGE);
+                    }
+                    return;
+                }
+                
                 // Launch picker; playback will auto-start on selection
                 stopCameraPipeline();
                 stopFilePlayback();
                 pickVideoLauncher.launch("video/*");
+            } else if (checkedId == R.id.stream) {
+                // Start RTSP streaming
+                String rtspUrl = rtspInput.getText().toString().trim();
+                if (rtspUrl.isEmpty()) {
+                    Toast.makeText(this, "Please enter RTSP URL", Toast.LENGTH_SHORT).show();
+                    return;
+                }
+                stopCameraPipeline();
+                stopFilePlayback();
+                startRtspStreaming(rtspUrl);
             }
         });
-
-//        startCameraBtn.setOnClickListener(v -> {
-////            stopPlayer();
-//            startCameraPreview();
-//        });
-
-//        pickFileBtn.setOnClickListener(v -> {
-//            cameraAPI.stopCamera();
-//            // pick a video file from device
-//            pickVideoLauncher.launch("video/*");
-//        });
-//
-//        opencvRtspBtn.setOnClickListener(v -> {
-//            String url = rtspInput.getText().toString().trim();
-//            if (url.isEmpty()) {
-//                Toast.makeText(this, "Enter RTSP URL", Toast.LENGTH_SHORT).show();
-//                return;
-//            }
-////            stopPlayer();
-////            startOpenCvRtsp(url);
-//        });
 
         if (!allPermissionsGranted()) {
             requestPermissions(REQUIRED_PERMISSIONS, REQUEST_CODE_PERMISSIONS);
@@ -379,7 +416,7 @@ public class VideoDemoActivity extends AppCompatActivity {
                         if (canvas != null) {
                             // Scale to fit the surface dimensions
                             canvas.drawColor(android.graphics.Color.BLACK);
-                            android.graphics.Rect dest = new android.graphics.Rect(0, 0, canvas.getWidth(), canvas.getHeight());
+                            Rect dest = new Rect(0, (canvas.getHeight() - image.getWidth()) / 2, image.getHeight(), image.getWidth() + (canvas.getHeight() - image.getWidth()) / 2);
                             canvas.drawBitmap(reusableBitmap, null, dest, null);
                         }
                     } finally {
@@ -439,10 +476,25 @@ public class VideoDemoActivity extends AppCompatActivity {
         }
         return true;
     }
+    
+    private boolean storagePermissionsGranted() {
+        // For Android 13+ (API 33+), check READ_MEDIA_VIDEO
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
+            return ContextCompat.checkSelfPermission(this, Manifest.permission.READ_MEDIA_VIDEO) 
+                    == PackageManager.PERMISSION_GRANTED;
+        }
+        // For Android 10-12, check READ_EXTERNAL_STORAGE
+        return ContextCompat.checkSelfPermission(this, Manifest.permission.READ_EXTERNAL_STORAGE) 
+                == PackageManager.PERMISSION_GRANTED;
+    }
 
     @Override
     protected void onDestroy() {
         super.onDestroy();
+        
+        // Stop file playback (includes MediaPlayer cleanup)
+        stopFilePlayback();
+        
         if (cameraAPI != null) {
             cameraAPI.stopCamera();
         }
@@ -456,6 +508,9 @@ public class VideoDemoActivity extends AppCompatActivity {
             reusableBitmap = null;
         }
         pixelBuffer = null;
+        
+        // Clean up RTSP streaming
+        stopRtspStreaming();
     }
 
     private void playLocalUri(@NonNull Uri uri) {
@@ -464,15 +519,300 @@ public class VideoDemoActivity extends AppCompatActivity {
             cameraAPI.stopCamera();
         }
     }
-    private void startFilePlayback(@NonNull Uri uri) {
-        // Decode and render video frames onto the same SurfaceView using OpenCV
-        stopFilePlayback();
-        // Hide PlayerView if visible
+    // Remove the duplicate startFilePlayback() methods and add these:
 
+private void startFilePlayback(@NonNull Uri uri) {
+    // Decode and render video frames onto the same SurfaceView
+    stopFilePlayback();
+    
+    // CRITICAL: Force surface recreation to disconnect any existing consumers
+    // This prevents "already connected" errors
+    surfaceHolder.setFixedSize(1, 1);
+    surfaceHolder.setFixedSize(0, 0); // Reset to default
+    
+    clearSurfaceCanvas();
+    
+    // Small delay to ensure surface is fully disconnected
+    new Handler(getMainLooper()).postDelayed(() -> {
+        // Ensure surface is ready before starting playback
+        if (surfaceHolder.getSurface() == null || !surfaceHolder.getSurface().isValid()) {
+            Log.w(TAG, "Surface not ready, waiting for surface creation");
+            // Add a one-time callback to start playback when surface is ready
+            surfaceHolder.addCallback(new SurfaceHolder.Callback() {
+                @Override
+                public void surfaceCreated(@NonNull SurfaceHolder holder) {
+                    Log.d(TAG, "Surface created, starting playback");
+                    surfaceHolder.removeCallback(this);
+                    startFilePlaybackInternal(uri);
+                }
+
+                @Override
+                public void surfaceChanged(@NonNull SurfaceHolder holder, int format, int width, int height) {}
+
+                @Override
+                public void surfaceDestroyed(@NonNull SurfaceHolder holder) {
+                    surfaceHolder.removeCallback(this);
+                }
+            });
+            return;
+        }
+        
+        startFilePlaybackInternal(uri);
+    }, 100); // 100ms delay to ensure surface cleanup
+}
+
+private void startFilePlaybackInternal(@NonNull Uri uri) {
+        String scheme = uri.getScheme();
+        
+        // For content:// and file:// URIs, use MediaCodec for frame-by-frame processing
+        if ("content".equalsIgnoreCase(scheme) || "file".equalsIgnoreCase(scheme)) {
+            Log.d(TAG, "URI detected, using MediaCodec for playback");
+            startFilePlaybackWithMediaCodec(uri);
+            return;
+        }
+        
+        // Unknown scheme
+        Log.e(TAG, "Unsupported URI scheme: " + scheme);
+        runOnUiThread(() -> Toast.makeText(this, 
+            "Unsupported file type", Toast.LENGTH_SHORT).show());
+    }
+    
+    private void startFilePlaybackWithMediaCodec(@NonNull Uri uri) {
+        synchronized (filePlaybackLock) {
+            stopFilePlayback(); // Ensure everything is clean before starting
+            clearSurfaceCanvas();
+            filePlaybackRunning = true;
+
+            filePlaybackThread = new Thread(() -> {
+                try {
+                    // 1. Setup Extractor
+                    mediaExtractor = new MediaExtractor();
+                    mediaExtractor.setDataSource(this, uri, null);
+
+                    int trackIndex = -1;
+                    MediaFormat format = null;
+                    for (int i = 0; i < mediaExtractor.getTrackCount(); i++) {
+                        MediaFormat f = mediaExtractor.getTrackFormat(i);
+                        String mime = f.getString(MediaFormat.KEY_MIME);
+                        if (mime != null && mime.startsWith("video/")) {
+                            trackIndex = i;
+                            format = f;
+                            break;
+                        }
+                    }
+
+                    if (trackIndex == -1 || format == null) {
+                        throw new RuntimeException("No video track found in " + uri);
+                    }
+                    
+                    mediaExtractor.selectTrack(trackIndex);
+                    
+                    // Get video properties
+                    int width = format.getInteger(MediaFormat.KEY_WIDTH);
+                    int height = format.getInteger(MediaFormat.KEY_HEIGHT);
+                    float frameRate = format.containsKey(MediaFormat.KEY_FRAME_RATE) ? 
+                        format.getInteger(MediaFormat.KEY_FRAME_RATE) : 30f;
+                    long frameDelayMs = (long) (1000f / frameRate);
+                    
+                    Log.d(TAG, "Video: " + width + "x" + height + " @ " + frameRate + " fps");
+
+                    // 2. Setup Decoder WITHOUT Surface (buffer mode for CPU-accessible frames)
+                    String mime = format.getString(MediaFormat.KEY_MIME);
+                    mediaCodec = MediaCodec.createDecoderByType(mime);
+                    
+                    // CRITICAL: Configure without a Surface to get CPU-accessible buffers
+                    // Set color format to YUV420 for direct access
+                    format.setInteger(MediaFormat.KEY_COLOR_FORMAT, 
+                        android.media.MediaCodecInfo.CodecCapabilities.COLOR_FormatYUV420Flexible);
+                    
+                    mediaCodec.configure(format, null, null, 0); // null Surface = buffer mode
+                    mediaCodec.start();
+
+                    // 3. Run the decoding loop with frame timing
+                    MediaCodec.BufferInfo bufferInfo = new MediaCodec.BufferInfo();
+                    long timeoutUs = 10000; // 10ms
+                    long lastFrameTime = System.currentTimeMillis();
+
+                    while (filePlaybackRunning) {
+                        // Feed input to decoder
+                        int inputBufferId = mediaCodec.dequeueInputBuffer(timeoutUs);
+                        if (inputBufferId >= 0) {
+                            ByteBuffer inputBuffer = mediaCodec.getInputBuffer(inputBufferId);
+                            int sampleSize = mediaExtractor.readSampleData(inputBuffer, 0);
+
+                            if (sampleSize < 0) {
+                                // End of stream
+                                mediaCodec.queueInputBuffer(inputBufferId, 0, 0, 0, 
+                                    MediaCodec.BUFFER_FLAG_END_OF_STREAM);
+                            } else {
+                                mediaCodec.queueInputBuffer(inputBufferId, 0, sampleSize, 
+                                    mediaExtractor.getSampleTime(), 0);
+                                mediaExtractor.advance();
+                            }
+                        }
+
+                        // Get output from decoder (CPU-accessible buffer)
+                        int outputBufferId = mediaCodec.dequeueOutputBuffer(bufferInfo, timeoutUs);
+                        if (outputBufferId >= 0) {
+                            // Get the decoded frame as an Image
+                            Image image = mediaCodec.getOutputImage(outputBufferId);
+                            
+                            if (image != null) {
+                                try {
+                                    // Recreate bitmap if dimensions changed
+                                    if (reusableBitmap == null || 
+                                        reusableBitmap.getWidth() != image.getWidth() || 
+                                        reusableBitmap.getHeight() != image.getHeight()) {
+                                        if (reusableBitmap != null) reusableBitmap.recycle();
+                                        reusableBitmap = Bitmap.createBitmap(
+                                            image.getWidth(), image.getHeight(), Bitmap.Config.ARGB_8888);
+                                        pixelBuffer = new int[image.getWidth() * image.getHeight()];
+                                    }
+                                    
+                                    // Convert YUV to RGB
+                                    yuv420ToArgb(image, reusableBitmap, pixelBuffer);
+
+                                    // Draw to canvas
+                                    Canvas canvas = null;
+                                    try {
+                                        canvas = surfaceHolder.lockCanvas();
+                                        if (canvas != null) {
+                                            canvas.drawColor(android.graphics.Color.BLACK);
+                                            drawBitmapWithAspectRatio(canvas, reusableBitmap);
+                                        }
+                                    } finally {
+                                        if (canvas != null) surfaceHolder.unlockCanvasAndPost(canvas);
+                                    }
+                                } catch (Exception e) {
+                                    Log.e(TAG, "Error processing video frame", e);
+                                } finally {
+                                    try { image.close(); } catch (Exception ignore) {}
+                                }
+                            }
+                            
+                            // Release output buffer
+                            mediaCodec.releaseOutputBuffer(outputBufferId, false);
+                            
+                            // Frame rate control - maintain original video speed
+                            long now = System.currentTimeMillis();
+                            long elapsed = now - lastFrameTime;
+                            long sleepTime = frameDelayMs - elapsed;
+                            if (sleepTime > 0) {
+                                try { 
+                                    Thread.sleep(sleepTime); 
+                                } catch (InterruptedException e) { 
+                                    break; 
+                                }
+                            }
+                            lastFrameTime = System.currentTimeMillis();
+                        } else if (outputBufferId == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) {
+                            MediaFormat newFormat = mediaCodec.getOutputFormat();
+                            Log.d(TAG, "Output format changed: " + newFormat);
+                        }
+
+                        // Handle end of stream for looping
+                        if ((bufferInfo.flags & MediaCodec.BUFFER_FLAG_END_OF_STREAM) != 0) {
+                            Log.d(TAG, "Video ended, looping.");
+                            mediaExtractor.seekTo(0, MediaExtractor.SEEK_TO_PREVIOUS_SYNC);
+                            mediaCodec.flush(); // CRITICAL: Reset decoder state for looping
+                            lastFrameTime = System.currentTimeMillis(); // Reset timing
+                        }
+                    }
+                } catch (Exception e) {
+                    if (filePlaybackRunning) { // Don't show error if stopped manually
+                        Log.e(TAG, "Error during MediaCodec playback", e);
+                        runOnUiThread(() -> Toast.makeText(VideoDemoActivity.this, 
+                            "Failed to play video: " + e.getMessage(), Toast.LENGTH_LONG).show());
+                    }
+                } finally {
+                    releaseVideoResources();
+                }
+            }, "VideoPlaybackThread");
+            filePlaybackThread.start();
+        }
+    }
+    
+    private void drawBitmapWithAspectRatio(Canvas canvas, Bitmap bitmap) {
+        int canvasWidth = canvas.getWidth();
+        int canvasHeight = canvas.getHeight();
+        float bitmapRatio = (float) bitmap.getWidth() / bitmap.getHeight();
+        float canvasRatio = (float) canvasWidth / canvasHeight;
+        int destWidth, destHeight;
+
+        if (bitmapRatio > canvasRatio) {
+            // Fit by width
+            destWidth = canvasWidth;
+            destHeight = (int) (canvasWidth / bitmapRatio);
+        } else {
+            // Fit by height
+            destHeight = canvasHeight;
+            destWidth = (int) (canvasHeight * bitmapRatio);
+        }
+        
+        int left = (canvasWidth - destWidth) / 2;
+        int top = (canvasHeight - destHeight) / 2;
+        Rect dest = new Rect(left, top, left + destWidth, top + destHeight);
+        canvas.drawBitmap(bitmap, null, dest, null);
+    }
+    
+    private void releaseVideoResources() {
+        try {
+            if (mediaCodec != null) {
+                try {
+                    mediaCodec.stop();
+                } catch (Exception e) {
+                    Log.w(TAG, "Error stopping mediaCodec", e);
+                }
+                try {
+                    mediaCodec.release();
+                } catch (Exception e) {
+                    Log.w(TAG, "Error releasing mediaCodec", e);
+                }
+                mediaCodec = null;
+            }
+            if (mediaExtractor != null) {
+                try {
+                    mediaExtractor.release();
+                } catch (Exception e) {
+                    Log.w(TAG, "Error releasing mediaExtractor", e);
+                }
+                mediaExtractor = null;
+            }
+            // Note: fileImageReader is no longer used (buffer mode instead of surface mode)
+        } catch (Exception e) {
+            Log.e(TAG, "Error releasing video resources", e);
+        }
+    }
+
+    private void startFilePlaybackWithMediaPlayer(@NonNull Uri uri) {
+        // This method is now unused, but kept for reference or future fallback.
+        // The primary method is startFilePlaybackWithMediaCodec
+    }
+
+    // Extracted OpenCV-based file playback into its own method (uses cached file path if necessary)
+    private void startFilePlaybackWithOpenCV(@NonNull Uri uri) {
+        // OpenCV CANNOT handle content:// URIs or scoped storage paths
+        // Only use for direct file:// paths
+        String scheme = uri.getScheme();
+        if ("content".equalsIgnoreCase(scheme)) {
+            Log.e(TAG, "Cannot use OpenCV for content URIs - scoped storage not supported");
+            runOnUiThread(() -> Toast.makeText(this, 
+                "Video format not supported. Please try a different file.", Toast.LENGTH_LONG).show());
+            return;
+        }
+        
         // Resolve content Uri to a readable path; if not directly readable, copy to cache
         String path = UriUtils.resolveToPathOrCopyToCache(this, uri);
         if (path == null) {
-            Toast.makeText(this, "Unable to open selected file", Toast.LENGTH_SHORT).show();
+            runOnUiThread(() -> Toast.makeText(this, "Unable to open selected file", Toast.LENGTH_SHORT).show());
+            return;
+        }
+        
+        // Additional safety check - avoid scoped storage paths
+        if (path.contains(".transforms/synthetic") || path.contains("picker_get_content")) {
+            Log.e(TAG, "Scoped storage path detected, OpenCV cannot access: " + path);
+            runOnUiThread(() -> Toast.makeText(this, 
+                "Cannot access file from this location. MediaPlayer required but failed.", Toast.LENGTH_LONG).show());
             return;
         }
 
@@ -481,65 +821,181 @@ public class VideoDemoActivity extends AppCompatActivity {
             clearSurfaceCanvas();
             filePlaybackRunning = true;
             filePlaybackThread = new Thread(() -> {
-            VideoCapture capture = new VideoCapture(path);
-            if (!capture.isOpened()) {
-                runOnUiThread(() -> Toast.makeText(VideoDemoActivity.this, "Failed to open video", Toast.LENGTH_SHORT).show());
-                filePlaybackRunning = false;
-                return;
-            }
-
-            Mat frame = new Mat();
-            Bitmap bitmap = null;
-
-            while (filePlaybackRunning && capture.read(frame)) {
-                if (frame.empty()) continue;
-                // Convert Mat to Bitmap
-                Bitmap tmp = Bitmap.createBitmap(frame.cols(), frame.rows(), Bitmap.Config.ARGB_8888);
-                Utils.matToBitmap(frame, tmp);
-                if (bitmap != null && (bitmap.getWidth() != tmp.getWidth() || bitmap.getHeight() != tmp.getHeight())) {
-                    bitmap.recycle();
-                    bitmap = null;
+                // Resolve file and check availability
+                File videoFile = new File(path);
+                if (!videoFile.exists() || !videoFile.canRead()) {
+                    runOnUiThread(() -> Toast.makeText(VideoDemoActivity.this, "Selected file not readable: " + path, Toast.LENGTH_SHORT).show());
+                    filePlaybackRunning = false;
+                    return;
                 }
-                if (bitmap == null) bitmap = Bitmap.createBitmap(tmp.getWidth(), tmp.getHeight(), Bitmap.Config.ARGB_8888);
-                // Copy to reusable bitmap
-                new Canvas(bitmap).drawBitmap(tmp, 0, 0, null);
-                tmp.recycle();
+                
+                Log.d(TAG, "Starting OpenCV playback for file: " + path);
 
-                // Draw to SurfaceView
-                Canvas canvas = null;
+                VideoCapture capture = new VideoCapture();
+                Mat frame = new Mat();
+                Bitmap bitmap = null;
+
                 try {
-                    canvas = surfaceHolder.lockCanvas();
-                    if (canvas != null) {
-                        // Scale to fit the surface dimensions
-                        canvas.drawColor(android.graphics.Color.BLACK);
-                        android.graphics.Rect dest = new android.graphics.Rect(0, 0, canvas.getWidth(), canvas.getHeight());
-                        canvas.drawBitmap(bitmap, null, dest, null);
+                    boolean opened = false;
+                    try {
+                        opened = capture.open(path);
+                    } catch (Throwable t) {
+                        Log.e(TAG, "VideoCapture.open threw exception", t);
+                        opened = false;
                     }
-                } catch (Exception ignore) {
-                } finally {
-                    if (canvas != null) surfaceHolder.unlockCanvasAndPost(canvas);
-                }
-            }
 
-            // Cleanup
-            if (bitmap != null) bitmap.recycle();
-            frame.release();
-            capture.release();
-            filePlaybackRunning = false;
-        }, "FilePlaybackThread");
+                    if (!opened || !capture.isOpened()) {
+                        runOnUiThread(() -> Toast.makeText(VideoDemoActivity.this, "Failed to open video with OpenCV", Toast.LENGTH_SHORT).show());
+                        filePlaybackRunning = false;
+                        return;
+                    }
+                    
+                    // Get video properties
+                    double fps = capture.get(org.opencv.videoio.Videoio.CAP_PROP_FPS);
+                    if (fps <= 0 || fps > 120) fps = 30; // default to 30 fps if invalid
+                    long frameDelayMs = (long)(1000.0 / fps);
+                    Log.d(TAG, "Video FPS: " + fps + ", frame delay: " + frameDelayMs + "ms");
+
+                    int consecutiveNullFrames = 0;
+                    final int MAX_NULL_FRAMES = 10;
+                    long lastFrameTime = System.currentTimeMillis();
+
+                    while (filePlaybackRunning) {
+                        boolean readOk = false;
+                        try {
+                            readOk = capture.read(frame);
+                        } catch (Throwable t) {
+                            Log.e(TAG, "VideoCapture.read threw exception", t);
+                            break;
+                        }
+                        
+                        if (!readOk || frame.empty()) {
+                            consecutiveNullFrames++;
+                            if (consecutiveNullFrames > MAX_NULL_FRAMES) {
+                                // Reached end of video, loop back to start
+                                Log.d(TAG, "Reached end of video, looping...");
+                                capture.set(org.opencv.videoio.Videoio.CAP_PROP_POS_FRAMES, 0);
+                                consecutiveNullFrames = 0;
+                            }
+                            try { Thread.sleep(10); } catch (InterruptedException ignored) {}
+                            continue;
+                        }
+                        consecutiveNullFrames = 0;
+                        
+                        // Convert Mat to Bitmap
+                        Bitmap tmp = Bitmap.createBitmap(frame.cols(), frame.rows(), Bitmap.Config.ARGB_8888);
+                        Utils.matToBitmap(frame, tmp);
+                        if (bitmap != null && (bitmap.getWidth() != tmp.getWidth() || bitmap.getHeight() != tmp.getHeight())) {
+                            bitmap.recycle();
+                            bitmap = null;
+                        }
+                        if (bitmap == null) bitmap = Bitmap.createBitmap(tmp.getWidth(), tmp.getHeight(), Bitmap.Config.ARGB_8888);
+                        // Copy to reusable bitmap
+                        new Canvas(bitmap).drawBitmap(tmp, 0, 0, null);
+                        tmp.recycle();
+
+                        // Draw to SurfaceView
+                        Canvas canvas = null;
+                        try {
+                            canvas = surfaceHolder.lockCanvas();
+                            if (canvas != null) {
+                                canvas.drawColor(android.graphics.Color.BLACK);
+
+                                int canvasWidth = canvas.getWidth();
+                                int canvasHeight = canvas.getHeight();
+                                int bitmapWidth = bitmap.getWidth();
+                                int bitmapHeight = bitmap.getHeight();
+
+                                float bitmapRatio = (float) bitmapWidth / bitmapHeight;
+                                float canvasRatio = (float) canvasWidth / canvasHeight;
+
+                                int destWidth, destHeight;
+                                if (bitmapRatio > canvasRatio) {
+                                    // Fit by width
+                                    destWidth = canvasWidth;
+                                    destHeight = (int) (canvasWidth / bitmapRatio);
+                                } else {
+                                    // Fit by height
+                                    destHeight = canvasHeight;
+                                    destWidth = (int) (canvasHeight * bitmapRatio);
+                                }
+
+                                int left = (canvasWidth - destWidth) / 2;
+                                int top = (canvasHeight - destHeight) / 2;
+
+                                android.graphics.Rect dest = new android.graphics.Rect(
+                                        left,
+                                        top,
+                                        left + destWidth,
+                                        top + destHeight
+                                );
+
+                                canvas.drawBitmap(bitmap, null, dest, null);
+                            }
+                        } catch (Exception e) {
+                            Log.w(TAG, "Error drawing frame", e);
+                        } finally {
+                            if (canvas != null) surfaceHolder.unlockCanvasAndPost(canvas);
+                        }
+                        
+                        // Frame rate control
+                        long now = System.currentTimeMillis();
+                        long elapsed = now - lastFrameTime;
+                        long sleepTime = frameDelayMs - elapsed;
+                        if (sleepTime > 0) {
+                            try { Thread.sleep(sleepTime); } catch (InterruptedException ignored) {}
+                        }
+                        lastFrameTime = System.currentTimeMillis();
+                    }
+
+                } catch (Throwable t) {
+                    Log.e(TAG, "Unhandled error during file playback", t);
+                    runOnUiThread(() -> Toast.makeText(VideoDemoActivity.this, "Playback error: " + t.getMessage(), Toast.LENGTH_SHORT).show());
+                } finally {
+                    try { if (bitmap != null) bitmap.recycle(); } catch (Throwable ignored) {}
+                    try { frame.release(); } catch (Throwable ignored) {}
+                    try { if (capture != null) capture.release(); } catch (Throwable ignored) {}
+                    filePlaybackRunning = false;
+                    Log.d(TAG, "OpenCV playback stopped");
+                }
+            }, "FilePlaybackThread");
             filePlaybackThread.start();
         }
     }
 
     private void stopFilePlayback() {
-        filePlaybackRunning = false;
-        if (filePlaybackThread != null) {
-            try {
-                filePlaybackThread.join(1000);
-            } catch (InterruptedException ignore) {
+        synchronized (filePlaybackLock) {
+            if (!filePlaybackRunning && filePlaybackThread == null) {
+                return; // Already stopped
             }
-            filePlaybackThread = null;
+            
+            filePlaybackRunning = false;
+            
+            if (filePlaybackThread != null) {
+                filePlaybackThread.interrupt();
+                try {
+                    filePlaybackThread.join(500); // Wait for thread to finish
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    Log.w(TAG, "Interrupted while waiting for playback thread to stop");
+                }
+                filePlaybackThread = null;
+            }
+
+            // Release all video resources
+            releaseVideoResources();
+
+            // Stop MediaPlayer if it was somehow used (legacy fallback)
+            try {
+                if (mediaPlayer != null) {
+                    try { mediaPlayer.stop(); } catch (Exception ignore) {}
+                    try { mediaPlayer.reset(); } catch (Exception ignore) {}
+                    try { mediaPlayer.release(); } catch (Exception ignore) {}
+                    mediaPlayer = null;
+                }
+            } catch (Exception ignore) {}
         }
+        
         clearSurfaceCanvas();
     }
 
@@ -557,7 +1013,25 @@ public class VideoDemoActivity extends AppCompatActivity {
         // Stop everything before starting a new source
         stopFilePlayback();
         stopCameraPipeline();
+        stopRtspStreaming();
         clearSurfaceCanvas();
+    }
+    
+    private void startRtspStreaming(String rtspUrl) {
+        if (rtspStreamingService != null) {
+            // Test network connectivity first
+            rtspStreamingService.testNetworkConnectivity(rtspUrl);
+            // Test connection
+            rtspStreamingService.testConnection(rtspUrl);
+            // Start streaming
+            rtspStreamingService.startStreaming(rtspUrl);
+        }
+    }
+    
+    private void stopRtspStreaming() {
+        if (rtspStreamingService != null) {
+            rtspStreamingService.stopStreaming();
+        }
     }
 
 
@@ -568,6 +1042,14 @@ public class VideoDemoActivity extends AppCompatActivity {
         if (requestCode == REQUEST_CODE_PERMISSIONS) {
             if (!allPermissionsGranted()) {
                 Toast.makeText(this, "Permissions not granted. Some features may not work.", Toast.LENGTH_LONG).show();
+            }
+        } else if (requestCode == REQUEST_CODE_STORAGE) {
+            if (grantResults.length > 0 && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
+                Log.d(TAG, "Storage permission granted, launching file picker");
+                // Permission granted, launch the picker
+                pickVideoLauncher.launch("video/*");
+            } else {
+                Toast.makeText(this, "Storage permission denied. Cannot access video files.", Toast.LENGTH_LONG).show();
             }
         }
     }

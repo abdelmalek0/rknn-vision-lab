@@ -5,5 +5,7 @@
          <item name="colorPrimary">@color/green</item>
     </style>
 
-    <style name="Theme.RKNNVisionLab" parent="Base.Theme.RKNNVisionLab" />
+    <style name="Theme.RKNNVisionLab" parent="Base.Theme.RKNNVisionLab" >
+        <item name="colorPrimary">@color/green</item>
+    </style>
 </resources>

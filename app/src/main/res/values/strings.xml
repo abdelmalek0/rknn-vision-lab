@@ -4,4 +4,9 @@
     <string name="imageCard">Image</string>
     <string name="settingsCard">Settings</string>
     <string name="play">Play</string>
+    <string name="video_source">Video Source</string>
+    <string name="device_camera">Device Camera</string>
+    <string name="video_file">Video File</string>
+    <string name="rtsp_stream">RTSP Stream</string>
+    <string name="rtsp_or_http">rtsp:// or http:// ...</string>
 </resources>
