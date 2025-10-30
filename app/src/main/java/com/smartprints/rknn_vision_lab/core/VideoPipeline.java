@@ -1,5 +1,6 @@
 package com.smartprints.rknn_vision_lab.core;
 
+import android.content.Context;
 import android.graphics.Bitmap;
 import android.view.SurfaceHolder;
 
@@ -25,12 +26,12 @@ public class VideoPipeline implements VideoSourceListener{
 
     private final AtomicBoolean running = new AtomicBoolean(false);
 
-    private final InferenceEngine engine;
+    private InferenceEngine engine;
     private final SurfaceRenderer renderer;
 
-    public VideoPipeline(SurfaceRenderer renderer, InferenceEngine engine) {
+    public VideoPipeline(Context context, SurfaceRenderer renderer) {
         this.renderer = renderer;
-        this.engine = (engine != null) ? engine : new RknnInferenceEngine();
+        inferenceExecutor.execute(() -> engine = new RknnInferenceEngine(context));
     }
 
     public void start() {

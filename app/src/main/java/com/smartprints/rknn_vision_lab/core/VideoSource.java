@@ -24,7 +24,7 @@ public abstract class VideoSource {
         if (backgroundThread == null) return;
         backgroundThread.quitSafely();
         try {
-            backgroundThread.join(100);
+            backgroundThread.join();
         } catch (InterruptedException e) {
             XLog.e(TAG, e.getMessage());
         } finally {

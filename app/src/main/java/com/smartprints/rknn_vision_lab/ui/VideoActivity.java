@@ -71,9 +71,9 @@ public class VideoActivity extends AppCompatActivity implements SurfaceHolder.Ca
                 new ActivityResultContracts.GetContent(),
                 this::onVideoPicked
         );
-        InferenceEngine engine = new RknnInferenceEngine();
+
         renderer = new SurfaceRenderer(surfaceHolder);
-        videoPipeline = new VideoPipeline(renderer, engine);
+        videoPipeline = new VideoPipeline(this, renderer);
         videoPipeline.start();
 
         Button playVideo = findViewById(R.id.playVideo);
