@@ -1,7 +1,6 @@
 package org.opencv.core
 
 import org.opencv.core.Mat.*
-import java.lang.RuntimeException
 
 fun Mat.get(row: Int, col: Int, data: UByteArray)  = this.get(row, col, data.asByteArray())
 fun Mat.get(indices: IntArray, data: UByteArray)  = this.get(indices, data.asByteArray())

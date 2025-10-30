@@ -1,2 +1,0 @@
-ninja: Entering directory `/home/abdelmalek0/sandbox/smartprints/RKNN_VISION_LAB/opencv/.cxx/Debug/5k4sl1zu/x86_64'
-ninja: no work to do.

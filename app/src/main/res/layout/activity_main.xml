@@ -9,7 +9,7 @@
     android:orientation="vertical"
     android:background="@color/beige"
     android:padding="40dp"
-    tools:context=".MainActivity">
+    tools:context=".ui.MainActivity">
 
     <FrameLayout
         android:layout_width="match_parent"
@@ -19,7 +19,7 @@
         <TextView
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:layout_gravity="center_vertical"
+            android:layout_gravity="center"
             android:text="@string/app_name"
             android:textColor="@color/black"
             android:textSize="50sp"
@@ -39,6 +39,7 @@
             android:id="@+id/videoCard"
             android:layout_width="match_parent"
             android:layout_height="200dp"
+            android:minHeight="100dp"
             android:clickable="true"
             android:focusable="true"
             android:backgroundTint="@color/green"
@@ -47,16 +48,33 @@
             app:cardCornerRadius="20dp"
             app:cardElevation="8dp">
 
+            <LinearLayout
+                android:padding="20dp"
+                android:orientation="vertical"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent">
+
+            <ImageView
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:layout_weight="1"
+                android:src="@drawable/ic_video"
+                android:foregroundTint="@color/black"
+                />
+
             <TextView
                 android:layout_width="match_parent"
                 android:layout_height="match_parent"
+                android:layout_weight="1.34"
                 android:gravity="center"
                 android:text="@string/videoCard"
-                android:textColor="@color/white"
+                android:textColor="@color/black"
                 android:textSize="30sp"
                 android:textStyle="bold"
                 android:letterSpacing=".1"
                 android:textAllCaps="true" />
+
+            </LinearLayout>
 
         </com.google.android.material.card.MaterialCardView>
 
@@ -73,16 +91,33 @@
             app:cardCornerRadius="20dp"
             app:cardElevation="8dp">
 
-            <TextView
+            <LinearLayout
+                android:padding="20dp"
+                android:orientation="vertical"
                 android:layout_width="match_parent"
-                android:layout_height="match_parent"
-                android:gravity="center"
-                android:text="@string/imageCard"
-                android:textColor="@color/white"
-                android:textSize="30sp"
-                android:textStyle="bold"
-                android:letterSpacing=".1"
-                android:textAllCaps="true" />
+                android:layout_height="match_parent">
+
+                <ImageView
+                    android:layout_width="match_parent"
+                    android:layout_height="match_parent"
+                    android:layout_weight="1"
+                    android:src="@drawable/ic_image"
+                    android:foregroundTint="@color/black"
+                    />
+
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="match_parent"
+                    android:layout_weight="1.34"
+                    android:gravity="center"
+                    android:text="@string/imageCard"
+                    android:textColor="@color/black"
+                    android:textSize="30sp"
+                    android:textStyle="bold"
+                    android:letterSpacing=".1"
+                    android:textAllCaps="true" />
+
+            </LinearLayout>
 
         </com.google.android.material.card.MaterialCardView>
 
@@ -99,16 +134,33 @@
             app:cardCornerRadius="20dp"
             app:cardElevation="8dp">
 
-            <TextView
+            <LinearLayout
+                android:padding="20dp"
+                android:orientation="vertical"
                 android:layout_width="match_parent"
-                android:layout_height="match_parent"
-                android:gravity="center"
-                android:text="@string/settingsCard"
-                android:textColor="@color/white"
-                android:textSize="30sp"
-                android:textStyle="bold"
-                android:letterSpacing=".1"
-                android:textAllCaps="true" />
+                android:layout_height="match_parent">
+
+                <ImageView
+                    android:layout_width="match_parent"
+                    android:layout_height="match_parent"
+                    android:layout_weight="1"
+                    android:src="@drawable/ic_settings"
+                    android:foregroundTint="@color/black"
+                    />
+
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="match_parent"
+                    android:layout_weight="1.34"
+                    android:gravity="center"
+                    android:text="@string/settingsCard"
+                    android:textColor="@color/black"
+                    android:textSize="30sp"
+                    android:textStyle="bold"
+                    android:letterSpacing=".1"
+                    android:textAllCaps="true" />
+
+            </LinearLayout>
 
         </com.google.android.material.card.MaterialCardView>
 
