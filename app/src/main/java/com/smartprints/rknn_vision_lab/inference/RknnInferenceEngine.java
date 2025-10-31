@@ -38,23 +38,23 @@ public class RknnInferenceEngine implements InferenceEngine {
 
     @Override
     public Bitmap process(Bitmap bitmap) {
-        List<DetectedObject> detections = YoloDetector.detect(bitmap, 0, 0, 1, 1);
-        XLog.d("startInference", "Total time of detection: " + YoloDetector.getPipelineExecutionTime() + " seconds");
-
-        // Scale detections back to original frame size
-//        float widthScaleFactor = (float) frameRGB.width() / DETECTOR_INPUT_SIZE;
-//        float heightScaleFactor = (float) frameRGB.height() / DETECTOR_INPUT_SIZE;
-
-        // Filter based on the cropped area
-        List<Rect> validBoundingBoxes = detections.stream()
-                .map(detection -> new Rect(
-                        detection.getBoundingBox().left,
-                        detection.getBoundingBox().top,
-                        (detection.getBoundingBox().right - detection.getBoundingBox().left),
-                        (detection.getBoundingBox().bottom - detection.getBoundingBox().top)
-                ))
-                .collect(Collectors.toList());
-        drawBoundingBoxes(bitmap, validBoundingBoxes);
+//        List<DetectedObject> detections = YoloDetector.detect(bitmap, 0, 0, 1, 1);
+//        XLog.d("startInference", "Total time of detection: " + YoloDetector.getPipelineExecutionTime() + " seconds");
+//
+//        // Scale detections back to original frame size
+////        float widthScaleFactor = (float) frameRGB.width() / DETECTOR_INPUT_SIZE;
+////        float heightScaleFactor = (float) frameRGB.height() / DETECTOR_INPUT_SIZE;
+//
+//        // Filter based on the cropped area
+//        List<Rect> validBoundingBoxes = detections.stream()
+//                .map(detection -> new Rect(
+//                        detection.getBoundingBox().left,
+//                        detection.getBoundingBox().top,
+//                        (detection.getBoundingBox().right - detection.getBoundingBox().left),
+//                        (detection.getBoundingBox().bottom - detection.getBoundingBox().top)
+//                ))
+//                .collect(Collectors.toList());
+//        drawBoundingBoxes(bitmap, validBoundingBoxes);
         // TODO: run inference and draw overlays onto a mutable bitmap
         return bitmap; // Pass-through placeholder
     }

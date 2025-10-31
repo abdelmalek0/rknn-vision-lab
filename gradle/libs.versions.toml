@@ -1,5 +1,9 @@
 [versions]
 agp = "7.4.2"
+cameraCore = "1.5.1"
+cameraCoreVersion = "1.2.2"
+ffmpegPlatform = "7.1-1.5.11"
+javacv = "1.5.12"
 junit = "4.13.2"
 junitVersion = "1.1.5"
 espressoCore = "3.5.1"
@@ -7,8 +11,16 @@ appcompat = "1.6.1"
 material = "1.10.0"
 activity = "1.8.0"
 constraintlayout = "2.1.4"
+opencvPlatform = "4.11.0-1.5.12"
+xlog = "1.11.1"
 
 [libraries]
+camera-camera2 = { module = "androidx.camera:camera-camera2", version.ref = "cameraCoreVersion" }
+camera-core = { module = "androidx.camera:camera-core", version.ref = "cameraCoreVersion" }
+camera-lifecycle = { module = "androidx.camera:camera-lifecycle", version.ref = "cameraCoreVersion" }
+camera-view = { module = "androidx.camera:camera-view", version.ref = "cameraCoreVersion" }
+ffmpeg-platform = { module = "org.bytedeco:ffmpeg-platform", version.ref = "ffmpegPlatform" }
+javacv = { module = "org.bytedeco:javacv", version.ref = "javacv" }
 junit = { group = "junit", name = "junit", version.ref = "junit" }
 ext-junit = { group = "androidx.test.ext", name = "junit", version.ref = "junitVersion" }
 espresso-core = { group = "androidx.test.espresso", name = "espresso-core", version.ref = "espressoCore" }
@@ -16,6 +28,8 @@ appcompat = { group = "androidx.appcompat", name = "appcompat", version.ref = "a
 material = { group = "com.google.android.material", name = "material", version.ref = "material" }
 activity = { group = "androidx.activity", name = "activity", version.ref = "activity" }
 constraintlayout = { group = "androidx.constraintlayout", name = "constraintlayout", version.ref = "constraintlayout" }
+opencv-platform = { module = "org.bytedeco:opencv-platform", version.ref = "opencvPlatform" }
+xlog = { module = "com.elvishew:xlog", version.ref = "xlog" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }

@@ -40,16 +40,12 @@ dependencies {
 
     implementation project(path: ':opencv')
 
-    // ExoPlayer for RTSP and local video playback
-    implementation 'com.google.android.exoplayer:exoplayer:2.18.6'
-
     // CameraX for device camera preview
-    implementation 'androidx.camera:camera-core:1.2.2'
-    implementation 'androidx.camera:camera-camera2:1.2.2'
-    implementation 'androidx.camera:camera-lifecycle:1.2.2'
-    implementation 'androidx.camera:camera-view:1.2.2'
-
-    implementation 'com.elvishew:xlog:1.11.1'
+    implementation libs.camera.core
+    implementation libs.camera.camera2
+    implementation libs.camera.lifecycle
+    implementation libs.camera.view
+    implementation libs.xlog
 }
 
 
@@ -70,7 +66,7 @@ task javacppExtract(type: Copy) {
 
 dependencies {
     implementation project(path: ':rknn_sdk')
-    implementation group: 'org.bytedeco', name: 'javacv', version: '1.5.8'
-    javacpp group: 'org.bytedeco', name: 'opencv-platform', version: '4.6.0-1.5.8'
-    javacpp group: 'org.bytedeco', name: 'ffmpeg-platform', version: "5.1.2-1.5.8"
+    implementation libs.javacv
+    javacpp libs.opencv.platform
+    javacpp libs.ffmpeg.platform
 }
